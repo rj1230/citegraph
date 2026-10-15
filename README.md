@@ -1,63 +1,100 @@
+<div align="center">
+
 # ⚡ CiteGraph
 
-## Production-Oriented Citation-Graph Classification
+### Production-Oriented Citation-Graph Classification
 
-Classify research papers in the Cora citation network using a Graph Convolutional Network (GCN), then serve the trained model through ONNX Runtime, FastAPI, and an interactive Streamlit dashboard.
+**A Graph Convolutional Network reads paper content and citation structure. ONNX Runtime, FastAPI, and Streamlit turn the trained model into a validated, explorable inference service.**
 
-🔗 **GitHub:** [citegraph](https://github.com/rj1230/citegraph)
+[![Python](https://img.shields.io/badge/Python-3.x-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![PyTorch Geometric](https://img.shields.io/badge/PyTorch_Geometric-GCN-3C2179?logo=pytorch&logoColor=white)](https://pytorch-geometric.readthedocs.io/)
+[![ONNX Runtime](https://img.shields.io/badge/ONNX_Runtime-Inference-005CED?logo=onnx&logoColor=white)](https://onnxruntime.ai/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Serving-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+🔗 **GitHub:** [rj1230/citegraph](https://github.com/rj1230/citegraph)
+
+</div>
 
 ---
 
 ## 📌 Overview
 
-CiteGraph is an end-to-end graph machine learning system for research-topic classification on the **Cora citation network**.
+**CiteGraph** is an end-to-end graph machine learning system for research-topic classification on the **Cora citation network**.
 
-Each paper is represented as a node with 1,433 bag-of-words features, while citations form edges between papers. A two-layer GCN learns from both paper content and local citation structure to predict one of seven research topics.
+Each paper is a node with 1,433 bag-of-words features, and citations form the edges. A two-layer GCN learns from both paper content and local citation structure to predict one of seven research topics.
 
-The project is not just a notebook model. It includes reproducible multi-seed evaluation, model comparison, ONNX export with numerical validation, a FastAPI inference service, and a Streamlit interface for exploring how citation structure affects predictions.
-
----
-
-## ✨ Key Capabilities
-
-### 🧠 Graph-Aware Classification
-
-- Two-layer GCN implemented with PyTorch Geometric.
-- Uses both node features and citation edges for classification.
-- Classifies 2,708 Cora papers into 7 research topics.
-- Achieves **82.5% ± 0.8** test accuracy across 10 random seeds.
-
-### 📊 Reproducible Benchmarking
-
-- Benchmarks MLP, GCN, GAT, and APPNP over 10 seeds.
-- Reports mean accuracy and standard deviation rather than single-run results.
-- Compares graph-based models against a feature-only MLP baseline.
-- GCN improves accuracy by **24.1 percentage points** over the MLP baseline.
-
-### 🚀 ONNX Inference
-
-- Exports the trained GCN to ONNX with dynamic node and edge dimensions.
-- Validates ONNX Runtime outputs against PyTorch on the full graph and a 1,000-node subgraph.
-- Maximum output difference between PyTorch and ONNX: approximately **1e-6**.
-
-### 🌐 FastAPI Serving
-
-- Serves the ONNX model through ONNX Runtime.
-- Provides cached full-graph Cora predictions.
-- Supports custom subgraph inference.
-- Normalizes features server-side.
-- Validates incoming requests before inference.
-
-### 🖥️ Interactive Streamlit Dashboard
-
-- Sends paper neighborhoods to the FastAPI service.
-- Displays predicted topic, class probabilities, and confidence.
-- Includes a citation-dropout slider to demonstrate the contribution of graph structure.
-- Visualizes benchmark results with error bars.
+This is not a notebook-only model. The trained network is exported to ONNX, numerically validated against PyTorch, served through FastAPI, and explored in a Streamlit dashboard that shows how citation structure changes predictions.
 
 ---
 
-## 📊 Validation Snapshot
+## Architecture
+
+```mermaid
+flowchart TD
+    A[Cora Dataset<br/>2,708 papers / 10,556 edges] --> B[Feature Normalization]
+    B --> C[PyTorch Geometric GCN<br/>Two-Layer, Early Stopping]
+    C --> D[Multi-Seed Evaluation<br/>MLP / GCN / GAT / APPNP]
+    C --> E[ONNX Export<br/>Dynamic Node + Edge Dims]
+    E --> F[Parity Check<br/>PyTorch vs ONNX Runtime]
+    F --> G[FastAPI + ONNX Runtime]
+    G --> H[Streamlit Dashboard]
+    D --> H
+```
+
+### System Layers
+
+| Layer | Responsibility |
+|---|---|
+| Modeling | Cora loading, feature normalization, GCN training, best-validation checkpointing |
+| Evaluation | 10-seed benchmarking of MLP, GCN, GAT, and APPNP with mean and standard deviation |
+| Export | ONNX export with dynamic node and edge dimensions and numerical parity validation |
+| Serving | FastAPI service on ONNX Runtime with server-side normalization and request validation |
+| Exploration | Streamlit dashboard for probabilities, confidence, and citation-dropout experiments |
+
+---
+
+## Key Features
+
+### Graph-Aware Classification
+
+- Two-layer GCN built with PyTorch Geometric
+- Uses both node features and citation edges
+- Classifies 2,708 Cora papers into 7 research topics
+- **82.5% ± 0.8** test accuracy across 10 random seeds
+
+### Reproducible Benchmarking
+
+- MLP, GCN, GAT, and APPNP compared over 10 seeds
+- Reports mean accuracy and standard deviation, not single-run results
+- Feature-only MLP baseline isolates the value of the citation graph
+- GCN improves accuracy by **24.1 percentage points** over the MLP
+
+### ONNX Inference
+
+- Trained GCN exported with dynamic node and edge dimensions
+- ONNX Runtime outputs validated against PyTorch on the full graph and a 1,000-node subgraph
+- Maximum output difference of approximately **1e-6**
+
+### FastAPI Serving
+
+- ONNX model served through ONNX Runtime
+- Cached full-graph Cora predictions
+- Custom subgraph inference
+- Server-side feature normalization
+- Incoming requests validated before inference
+
+### Interactive Dashboard
+
+- Sends paper neighborhoods to the FastAPI service
+- Shows predicted topic, class probabilities, and confidence
+- Citation-dropout slider demonstrates the contribution of graph structure
+- Benchmark results visualized with error bars
+
+---
+
+## Evaluation
 
 | Result | Value |
 |---|---:|
@@ -74,57 +111,9 @@ The project is not just a notebook model. It includes reproducible multi-seed ev
 | GCN improvement over MLP | **24.1 percentage points** |
 | ONNX vs. PyTorch max output difference | ~1e-6 |
 
-APPNP achieved the highest mean accuracy, but its improvement over GCN was within approximately one standard deviation. GCN was selected for deployment because it offers strong accuracy, a simpler architecture, and more reliable ONNX export.
+### Why Graph Structure Matters
 
----
-
-## 🏗️ Architecture
-
-### Request Flow
-
-```text
-Cora Dataset
-     |
-     v
-Feature Normalization
-     |
-     v
-PyTorch Geometric GCN
-     |
-     v
-ONNX Export
-     |
-     v
-FastAPI + ONNX Runtime
-     |
-     v
-Streamlit Dashboard
-```
-
-### Model Pipeline
-
-1. Load the Cora citation graph through PyTorch Geometric.
-2. Normalize node features.
-3. Train a two-layer GCN using the standard Cora train/validation/test split.
-4. Apply early stopping using best-validation weights.
-5. Evaluate across 10 random seeds.
-6. Export the best model to ONNX.
-7. Validate ONNX outputs against PyTorch.
-8. Serve predictions through FastAPI and ONNX Runtime.
-9. Explore predictions through Streamlit.
-
----
-
-## 🎯 Why Graph Structure Matters
-
-A feature-only MLP sees only the words in each paper. It cannot use the fact that papers citing similar research are often part of the same topic community.
-
-The GCN uses both:
-
-- **Node features:** 1,433 binary word-presence features.
-- **Graph structure:** citation links between papers.
-
-This allows the model to propagate information across the citation network and produce substantially better topic predictions.
+A feature-only MLP sees only the words in each paper. It cannot use the fact that papers citing similar research tend to share a topic.
 
 | Model | Uses Citation Graph | Accuracy |
 |---|---|---:|
@@ -133,88 +122,51 @@ This allows the model to propagate information across the citation network and p
 | GAT | Yes | Benchmarked |
 | APPNP | Yes | 83.1% |
 
----
-
-## 🔧 Engineering Notes
-
-### Checkpointing Fix
-
-During training, early stopping initially restored the latest model weights instead of the best-validation weights.
-
-The issue occurred because `state_dict()` returns live references to model tensors. After fixing checkpoint restoration and combining it with feature normalization and regularization, single-run accuracy improved from **78.4% to 82.6%**.
-
 ### Model Selection
 
-APPNP achieved the best mean accuracy at **83.1%**, but the difference from GCN was within roughly one standard deviation.
-
-GCN was selected for deployment because it:
-
-- Achieved nearly equivalent accuracy.
-- Has a simpler architecture.
-- Exports more reliably to ONNX.
-- Is easier to serve and maintain.
-
-### ONNX Parity
-
-The ONNX model was tested on:
-
-- The full Cora graph.
-- A 1,000-node subgraph.
-
-The maximum difference between PyTorch and ONNX Runtime outputs was approximately `1e-6`, confirming that the exported model preserves numerical behavior.
+APPNP had the highest mean accuracy, but its margin over GCN was within roughly one standard deviation. GCN was deployed because it offers nearly equivalent accuracy, a simpler architecture, more reliable ONNX export, and easier serving.
 
 ---
 
-## 📡 API
+## Reliability
 
-### Start the API
+| Risk | How It Is Handled |
+|---|---|
+| Single-run variance | Results reported as mean ± std over 10 seeds |
+| Early stopping restoring last weights | Fixed best-validation checkpoint restoration (`state_dict()` returns live tensor references) |
+| Export drift | ONNX outputs validated against PyTorch on the full graph and a 1,000-node subgraph |
+| Malformed requests | Validated by the API before inference |
+| Inconsistent preprocessing | Features normalized server-side, not by the client |
+
+**Checkpointing fix:** correcting best-weight restoration, together with feature normalization and regularization, raised single-run accuracy from **78.4% to 82.6%**.
+
+---
+
+## API
+
+Start the service:
 
 ```bash
 uvicorn api.app:app --reload
 ```
 
-Open interactive documentation:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-### Endpoints
+Interactive docs: <http://127.0.0.1:8000/docs>
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/health` | Check API and model availability |
-| GET | `/model-info` | Return model and dataset metadata |
-| POST | `/predict` | Run inference on a provided graph and node indices |
-| POST | `/predict/cora_node` | Run inference for selected Cora nodes |
+| GET | `/health` | API and model availability |
+| GET | `/model-info` | Model and dataset metadata |
+| POST | `/predict` | Inference on a provided graph and node indices |
+| POST | `/predict/cora_node` | Inference for selected Cora nodes |
 
 ---
 
-## 🖥️ Streamlit Dashboard
+## Tech Stack
 
-Start the dashboard:
-
-```bash
-streamlit run frontend/ui.py
-```
-
-The dashboard provides:
-
-- Paper-node selection and neighborhood construction.
-- Real-time inference through the FastAPI service.
-- Predicted topic and probability distribution.
-- Citation-dropout controls.
-- Benchmark comparison with error bars.
-- A visual demonstration of graph contribution to classification.
-
----
-
-## 🧩 Tech Stack
-
-| Layer | Tool |
+| Layer | Tools |
 |---|---|
-| Graph model | PyTorch Geometric GCN |
-| Deep-learning framework | PyTorch |
+| Graph model | PyTorch Geometric (GCN) |
+| Deep learning | PyTorch |
 | Model export | ONNX |
 | Inference runtime | ONNX Runtime |
 | API | FastAPI |
@@ -224,73 +176,69 @@ The dashboard provides:
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 citegraph/
 ├── api/
-│   └── app.py               # FastAPI ONNX inference service
+│   └── app.py                # FastAPI ONNX inference service
 ├── artifacts/
-│   ├── gcn.pt               # Trained PyTorch model
-│   └── simple_gcn_cora.onnx # Exported ONNX model
+│   ├── gcn.pt                # Trained PyTorch model
+│   └── simple_gcn_cora.onnx  # Exported ONNX model
 ├── frontend/
-│   └── ui.py                # Streamlit dashboard
+│   └── ui.py                 # Streamlit dashboard
 ├── notebooks/
-│   └── main.ipynb           # EDA, training, and evaluation
+│   └── main.ipynb            # EDA, training, and evaluation
 ├── src/
-│   ├── data.py              # Data loading and preprocessing
-│   ├── models.py            # GCN architecture
-│   ├── train.py             # Training and evaluation
-│   └── export_onnx.py       # ONNX export
+│   ├── data.py               # Data loading and preprocessing
+│   ├── models.py             # GCN architecture
+│   ├── train.py              # Training and evaluation
+│   └── export_onnx.py        # ONNX export
 ├── tests/
-│   └── check_api.py         # API checks
+│   └── check_api.py          # API checks
 ├── requirements.txt
 └── README.md
 ```
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### 1. Clone and install
+### Install
 
 ```bash
-git clone [https://github.com/rj1230/citegraph.git](https://github.com/rj1230/citegraph.git)
+git clone https://github.com/rj1230/citegraph.git
 cd citegraph
 ```
-
-Create and activate a virtual environment:
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
-Install dependencies:
-
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-### 2. Train the model
+### Train
 
 ```bash
 python src/train.py
 ```
 
-### 3. Export to ONNX
+### Export to ONNX
 
 ```bash
 python src/export_onnx.py
 ```
 
-### 4. Start the API
+### Start the API
 
 ```bash
 uvicorn api.app:app --reload
 ```
 
-### 5. Start the dashboard
+### Launch the dashboard
 
 ```bash
 streamlit run frontend/ui.py
@@ -298,22 +246,22 @@ streamlit run frontend/ui.py
 
 ---
 
-## 🧭 Design Principles
+## Testing
 
-- **Graph-aware, not feature-only** — the system explicitly measures the value added by citation structure.
-- **Reproducible evaluation** — results are reported across 10 seeds with mean and standard deviation.
-- **Deployment-first** — the trained model is exported, validated, and served through a real inference API.
-- **Explainable predictions** — the dashboard shows probabilities, confidence, and the effect of removing citation edges.
-- **Portable inference** — ONNX decouples trained PyTorch modeling from the serving runtime.
+API behavior is checked with `tests/check_api.py`, and the exported model is validated against PyTorch outputs on the full graph and a 1,000-node subgraph.
 
 ---
 
-## 📄 License
+## Design Principles
 
-This project is licensed under the MIT License.
+- **Graph-aware, not feature-only:** the system measures exactly what citation structure adds.
+- **Reproducible evaluation:** every headline number is a multi-seed mean and standard deviation.
+- **Deployment-first:** the model is exported, validated, and served through a real inference API.
+- **Explainable predictions:** probabilities, confidence, and citation-dropout effects are visible.
+- **Portable inference:** ONNX separates PyTorch training from the serving runtime.
 
 ---
 
-## 👤 GitHub
+## License
 
-[@rj1230](https://github.com/rj1230)
+Released under the [MIT License](LICENSE).
