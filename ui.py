@@ -1,33 +1,27 @@
-"""Cora GCN Explorer: single-file Streamlit UI.
+"""Cora GCN Explorer: single-file Streamlit UI (Streamlit Cloud ready).
 
-Run (two terminals, venv active, from the cite_gragh folder):
-    python -m uvicorn api.app:app
+The ONNX model runs inside this app, so no separate API server is needed.
+
+Run locally:
     streamlit run ui.py
 """
 
 import io
-import os
-import sys
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
-import requests
 import streamlit as st
 from matplotlib.colors import to_hex
 from matplotlib.lines import Line2D
-from torch_geometric.utils import k_hop_subgraph
 
-from src.data import load_cora
+from inference import ONNX_PATH, get_session, predict
 
-API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+ROOT = Path(__file__).resolve().parent
 RESULTS_CSV = ROOT / "artifacts" / "results.csv"
+DATA_NPZ = ROOT / "artifacts" / "cora.npz"
 
 # Fill this in once you have verified the label order, e.g. {0: "Theory", ...}
 CLASS_NAMES: dict = {}
@@ -96,47 +90,52 @@ def cls_label(c: int) -> str:
 
 
 # ----------------------------------------------------------------------------
-# API client
+# Data (pre-exported from PyG, so the cloud app needs no torch)
 # ----------------------------------------------------------------------------
-def _request(method, path, timeout=10, **kwargs):
-    try:
-        r = requests.request(method, f"{API_URL}{path}", timeout=timeout, **kwargs)
-        r.raise_for_status()
-        return r.json()
-    except requests.RequestException:
-        return None
-
-
-def api_health():
-    return _request("GET", "/health", timeout=2)
-
-
-def api_predict_node(node_id: int):
-    return _request("GET", f"/predict/node/{node_id}")
-
-
-def api_predict_subgraph(features, edge_index):
-    return _request(
-        "POST",
-        "/predict/subgraph",
-        json={"features": features, "edge_index": edge_index},
-        timeout=30,
+missing = [p.name for p in (ONNX_PATH, DATA_NPZ) if not p.exists()]
+if missing:
+    st.error(
+        f"Missing file(s) in artifacts/: {', '.join(missing)}. "
+        "Commit them to the repo (and check .gitignore). "
+        "Create cora.npz locally with `python export_data.py`."
     )
+    st.stop()
 
 
-# ----------------------------------------------------------------------------
-# Data (browsing only; the model always runs behind the API)
-# ----------------------------------------------------------------------------
 @st.cache_resource(show_spinner="Loading Cora...")
 def get_data():
-    dataset, data = load_cora()
-    raw = (data.x.numpy() > 0).astype("float32")  # raw 0/1 features the API expects
-    return dataset, data, raw
+    d = np.load(DATA_NPZ)
+    return d["raw"], d["edge_index"], d["y"]
 
 
-dataset, data, raw = get_data()
-N = data.num_nodes
-y = data.y.numpy()
+raw, edge_index, y = get_data()
+N = raw.shape[0]
+NUM_FEATURES = raw.shape[1]
+NUM_EDGES = edge_index.shape[1]
+NUM_CLASSES = int(y.max()) + 1
+
+
+@st.cache_resource(show_spinner="Running the model on the full graph...")
+def full_graph_preds():
+    """Replaces the API's cached full-graph logits."""
+    return predict(raw, edge_index)
+
+
+def k_hop_subgraph(node: int, hops: int, ei: np.ndarray, n: int):
+    """NumPy version of PyG's k_hop_subgraph (relabelled, sorted node ids)."""
+    in_set = np.zeros(n, dtype=bool)
+    in_set[node] = True
+    frontier = in_set.copy()
+    for _ in range(hops):
+        new = np.zeros(n, dtype=bool)
+        new[ei[0][frontier[ei[1]]]] = True
+        frontier = new & ~in_set
+        in_set |= new
+    subset = np.flatnonzero(in_set)
+    sub_ei = ei[:, in_set[ei[0]] & in_set[ei[1]]]
+    remap = -np.ones(n, dtype=np.int64)
+    remap[subset] = np.arange(len(subset))
+    return subset, remap[sub_ei], int(remap[node])
 
 
 def parse_pm(s: str):
@@ -194,17 +193,17 @@ def pred_kpi(title, pred, true_id):
 
 
 # ----------------------------------------------------------------------------
-# Sidebar: API status only
+# Sidebar: model status
 # ----------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("### Service status")
-    health = api_health()
-    if health:
-        st.success(f"API online · {health['nodes_cached']:,} nodes cached")
-    else:
-        st.error("API offline")
-        st.code("python -m uvicorn api.app:app", language="powershell")
-    st.caption(f"Endpoint: {API_URL}")
+    st.markdown("### Model status")
+    try:
+        get_session()
+        st.success("Model loaded (ONNX Runtime)")
+    except Exception as e:  # noqa: BLE001
+        st.error("Model failed to load")
+        st.code(str(e))
+    st.caption(f"{N:,} nodes · {NUM_EDGES:,} directed edges")
 
 # ----------------------------------------------------------------------------
 # Header
@@ -214,7 +213,7 @@ st.markdown(
 <div class="hero">
   <h1>Cora GCN Explorer</h1>
   <p>Classify research papers by topic from their text and their citation
-  neighborhood. A two-layer GCN served through ONNX Runtime and FastAPI.</p>
+  neighborhood. A two-layer GCN running on ONNX Runtime.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -223,9 +222,9 @@ st.markdown(
 best_acc = best_accuracy()
 s1, s2, s3, s4, s5 = st.columns(5)
 stat_box(s1, f"{N:,}", "Papers")
-stat_box(s2, f"{data.num_edges:,}", "Citation edges")
-stat_box(s3, f"{data.num_node_features:,}", "Word features")
-stat_box(s4, dataset.num_classes, "Topics")
+stat_box(s2, f"{NUM_EDGES:,}", "Citation edges")
+stat_box(s3, f"{NUM_FEATURES:,}", "Word features")
+stat_box(s4, NUM_CLASSES, "Topics")
 stat_box(s5, f"{best_acc:.1%}" if best_acc else "n/a", "Best test accuracy")
 st.write("")
 
@@ -246,133 +245,117 @@ with tab_explorer:
         seed = int(k4.number_input("Random seed", 0, 9999, 0))
 
     # Build the ego subgraph and thin out its citations
-    subset, ei, mapping, _ = k_hop_subgraph(
-        node_id, hops, data.edge_index, relabel_nodes=True, num_nodes=N
-    )
-    ei = ei.numpy()
+    subset, ei, target = k_hop_subgraph(node_id, hops, edge_index, N)
     und = ei[:, ei[0] < ei[1]]  # one row per undirected edge
     rng = np.random.default_rng(seed)
     n_keep = int(round(und.shape[1] * keep / 100))
     und = und[:, rng.permutation(und.shape[1])[:n_keep]]
     ei_used = np.concatenate([und, und[::-1]], axis=1)  # mirror to both directions
-    target = int(mapping.item())
-    direct_citations = int((data.edge_index[0] == node_id).sum())
+    direct_citations = int((edge_index[0] == node_id).sum())
 
-    full = api_predict_node(node_id)
-    sub = api_predict_subgraph(raw[subset.numpy()].tolist(), ei_used.tolist())
+    full = full_graph_preds()[node_id]
+    sub_pred = predict(raw[subset], ei_used)[target]
+    true_id = int(y[node_id])
 
-    if full is None or sub is None:
-        st.error(
-            "The API did not answer. Start it with "
-            "`python -m uvicorn api.app:app`, then refresh."
+    st.markdown('<div class="section">Prediction</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="grid4">'
+        + kpi("True label", class_big(true_id), "Ground truth from the dataset")
+        + pred_kpi("Full-graph prediction", full, true_id)
+        + pred_kpi("Ego-graph prediction", sub_pred, true_id)
+        + kpi(
+            "Direct citations",
+            f"{direct_citations}",
+            f"{len(subset)} papers in the {hops}-hop view",
         )
-    else:
-        sub_pred = sub["predictions"][target]
-        true_id = int(y[node_id])
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
-        st.markdown('<div class="section">Prediction</div>', unsafe_allow_html=True)
+    if full["class_id"] != sub_pred["class_id"]:
         st.markdown(
-            '<div class="grid4">'
-            + kpi("True label", class_big(true_id), "Ground truth from the dataset")
-            + pred_kpi("Full-graph prediction", full, true_id)
-            + pred_kpi("Ego-graph prediction", sub_pred, true_id)
+            '<div class="note" style="margin-top:.8rem">The two predictions differ. '
+            "With fewer neighbors the model has less evidence to work with.</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Neighborhood drawing
+    G = nx.Graph()
+    G.add_nodes_from(range(len(subset)))
+    G.add_edges_from(und.T.tolist())
+    sub_labels = y[subset]
+    colors = [PALETTE[int(c)] for c in sub_labels]
+    sizes = [520 if i == target else 55 for i in range(len(subset))]
+    outlines = ["white" if i == target else "none" for i in range(len(subset))]
+
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    fig.patch.set_alpha(0)
+    ax.set_facecolor("none")
+    pos = nx.spring_layout(G, seed=7)
+    nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.22, edge_color="#8899aa")
+    nx.draw_networkx_nodes(
+        G,
+        pos,
+        ax=ax,
+        node_color=colors,
+        node_size=sizes,
+        edgecolors=outlines,
+        linewidths=2,
+    )
+    present = sorted(set(int(c) for c in sub_labels))
+    handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="",
+            markersize=8,
+            markerfacecolor=PALETTE[c],
+            markeredgecolor="none",
+            label=cls_label(c),
+        )
+        for c in present
+    ]
+    ax.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.0),
+        ncol=min(len(handles), 4),
+        frameon=False,
+        labelcolor="#c9d4e5",
+        fontsize=9,
+    )
+    ax.axis("off")
+
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown('<div class="section">Neighborhood</div>', unsafe_allow_html=True)
+        show_fig(fig)
+        st.caption(
+            "Colors show the true topic. The large outlined node is the selected paper."
+        )
+    with right:
+        st.markdown(
+            '<div class="section">Input given to the model</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="grid2">'
+            + kpi("Papers", f"{len(subset)}", "nodes in the subgraph", small=True)
             + kpi(
-                "Direct citations",
-                f"{direct_citations}",
-                f"{len(subset)} papers in the {hops}-hop view",
+                "Directed edges",
+                f"{ei_used.shape[1]}",
+                "both directions",
+                small=True,
             )
             + "</div>",
             unsafe_allow_html=True,
         )
-
-        if full["class_id"] != sub_pred["class_id"]:
-            st.markdown(
-                '<div class="note" style="margin-top:.8rem">The two predictions differ. '
-                "With fewer neighbors the model has less evidence to work with.</div>",
-                unsafe_allow_html=True,
-            )
-
-        # Neighborhood drawing
-        G = nx.Graph()
-        G.add_nodes_from(range(len(subset)))
-        G.add_edges_from(und.T.tolist())
-        sub_labels = y[subset.numpy()]
-        colors = [PALETTE[int(c)] for c in sub_labels]
-        sizes = [520 if i == target else 55 for i in range(len(subset))]
-        outlines = ["white" if i == target else "none" for i in range(len(subset))]
-
-        fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        fig.patch.set_alpha(0)
-        ax.set_facecolor("none")
-        pos = nx.spring_layout(G, seed=7)
-        nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.22, edge_color="#8899aa")
-        nx.draw_networkx_nodes(
-            G,
-            pos,
-            ax=ax,
-            node_color=colors,
-            node_size=sizes,
-            edgecolors=outlines,
-            linewidths=2,
-        )
-        present = sorted(set(int(c) for c in sub_labels))
-        handles = [
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="",
-                markersize=8,
-                markerfacecolor=PALETTE[c],
-                markeredgecolor="none",
-                label=cls_label(c),
-            )
-            for c in present
-        ]
-        ax.legend(
-            handles=handles,
-            loc="upper center",
-            bbox_to_anchor=(0.5, 0.0),
-            ncol=min(len(handles), 4),
-            frameon=False,
-            labelcolor="#c9d4e5",
-            fontsize=9,
-        )
-        ax.axis("off")
-
-        left, right = st.columns([3, 2])
-        with left:
-            st.markdown(
-                '<div class="section">Neighborhood</div>', unsafe_allow_html=True
-            )
-            show_fig(fig)
-            st.caption(
-                "Colors show the true topic. The large outlined node is the selected paper."
-            )
-        with right:
-            st.markdown(
-                '<div class="section">Request sent to the API</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                '<div class="grid2">'
-                + kpi("Papers", f"{len(subset)}", "nodes in the request", small=True)
-                + kpi(
-                    "Directed edges",
-                    f"{ei_used.shape[1]}",
-                    "both directions",
-                    small=True,
-                )
-                + "</div>",
-                unsafe_allow_html=True,
-            )
-            st.caption(
-                f"{hops}-hop neighborhood, {keep}% of citations kept, seed {seed}."
-            )
-            with st.expander("API response: ego graph (selected paper)"):
-                st.json(sub_pred)
-            with st.expander("API response: full graph"):
-                st.json(full)
+        st.caption(f"{hops}-hop neighborhood, {keep}% of citations kept, seed {seed}.")
+        with st.expander("Model output: ego graph (selected paper)"):
+            st.json(sub_pred)
+        with st.expander("Model output: full graph"):
+            st.json(full)
 
 
 # ----------------------------------------------------------------------------
@@ -495,16 +478,17 @@ with tab_about:
             "stopping on validation accuracy.\n"
             "2. **Export**: the best checkpoint is exported to ONNX with dynamic node "
             "and edge counts, then checked against PyTorch (max difference ~1e-6).\n"
-            "3. **Serve**: FastAPI loads the ONNX session once. `/predict/node` returns "
-            "cached full-graph logits. `/predict/subgraph` accepts raw features and edges, "
-            "normalizes the features and runs the model on that graph.\n"
-            "4. **Explore**: this UI sends neighborhoods to the API, so every prediction "
-            "goes through the same path a real client would use."
+            "3. **Serve**: this app loads the ONNX session once. The full-graph "
+            "predictions are computed once and cached. For a selected paper, the app "
+            "builds a neighborhood subgraph, normalizes the raw features and runs the "
+            "model on that graph.\n"
+            "4. **Explore**: change the depth, the share of citations kept and the seed "
+            "to see how the prediction reacts to missing evidence."
         )
         st.code(
-            "Streamlit UI  ->  FastAPI  ->  ONNX Runtime (GCN)\n"
+            "Streamlit UI  ->  ONNX Runtime (GCN)\n"
             "     |\n"
-            "     +-- Cora (browsing only) + artifacts/results.csv",
+            "     +-- artifacts/cora.npz + artifacts/results.csv",
             language="text",
         )
     with a2:
@@ -512,11 +496,11 @@ with tab_about:
         st.dataframe(
             pd.DataFrame(
                 {
-                    "Layer": ["Modeling", "Export", "Serving", "Interface"],
+                    "Layer": ["Modeling", "Export", "Inference", "Interface"],
                     "Tools": [
                         "PyTorch, PyG",
-                        "ONNX, ONNX Runtime",
-                        "FastAPI, Uvicorn",
+                        "ONNX",
+                        "ONNX Runtime",
                         "Streamlit",
                     ],
                 }
@@ -527,7 +511,7 @@ with tab_about:
     st.markdown('<div class="section">Limitations</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="note">Results use the fixed public Planetoid split, so the ± values '
-        "reflect seed variance only, not split variance. The subgraph endpoint was "
+        "reflect seed variance only, not split variance. The subgraph path was "
         "checked on a prefix subgraph, not arbitrary ones. Dropping citations changes "
         "the graph the model sees, so ego-graph predictions are expected to differ "
         "from full-graph ones.</div>",
